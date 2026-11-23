@@ -370,3 +370,4 @@ function main()
     if not updateBusy and os.time()-lastUpdateCheck>=1800 then checkUpdate() end
     if active and #active.items>0 and os.time()-lastAt >= (tonumber(cfg.main.settle_seconds) or 15) then finish() end
   end
+end
