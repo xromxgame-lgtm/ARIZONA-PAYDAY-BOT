@@ -244,14 +244,14 @@ local function checkUpdate()
       local ver,hash,download=body:match('^%s*([^|\r\n]+)|([a-fA-F0-9]+)|([^\r\n]+)')
       if not ver or not hash or #hash~=64 or not trustedUrl(download) then error('Неверный manifest.txt') end
       if not versionParts(ver) then error('Неверная версия') end
-      if versionParts(ver)>versionParts('1.4.4') then
+      if versionParts(ver)>versionParts('1.4.5') then
         updateInfo={version=ver,sha=hash:lower(),url=download}
         updateState='Доступна новая версия '..ver..'! Нажми УСТАНОВИТЬ.'
-        if updateNoticeVersion~=ver then note('Update available: v'..ver..'. Open /pl'); updateNoticeVersion=ver end
+        if updateNoticeVersion~=ver then note('Доступна версия '..ver..'. Открой /pl'); updateNoticeVersion=ver end
       else updateInfo=nil;updateState='Установлена актуальная версия (GitHub: '..ver..')' end
     end)
     if not ok then updateInfo=nil;updateState='Ошибка проверки: '..tostring(err):sub(1,110) end
-    note(ok and (updateInfo and ('Update available: '..updateInfo.version) or 'No new updates') or 'Update check failed. Open /pl')
+    note(ok and (updateInfo and ('Доступно обновление '..updateInfo.version) or 'Обновлений нет') or 'Ошибка проверки обновлений. Открой /pl')
     updateBusy=false
   end)
 end
@@ -286,7 +286,7 @@ local function installUpdate()
       updateState='Версия '..info.version..' установлена. Перезапусти игру.'
     end)
     if not ok then updateState='Ошибка установки: '..tostring(err):sub(1,110) end
-    note(ok and 'Update installed; restart game' or 'Update install failed; see /pl')
+    note(ok and 'Обновление установлено. Перезапусти игру' or 'Ошибка установки. Открой /pl')
     updateBusy=false
   end)
 end
