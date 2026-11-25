@@ -1,6 +1,6 @@
 script_name('ARIZONA PAYDAY BOT PL')
 script_author('SHEWA')
-script_version('1.5.1')
+script_version('1.5.2')
 
 local inicfg = require 'inicfg'
 local encoding = require 'encoding'
@@ -11,7 +11,8 @@ local u8 = encoding.UTF8
 local configName = 'arizona_payday_pl'
 local MANIFEST_URL = 'https://raw.githubusercontent.com/xromxgame-lgtm/ARIZONA-PAYDAY-BOT/main/manifest.txt'
 local RELEASE_URL = 'https://raw.githubusercontent.com/xromxgame-lgtm/ARIZONA-PAYDAY-BOT/main/arizona_payday_pl.lua'
-local VERSION = '1.5.1'
+local VERSION = '1.5.2'
+local UPDATE_INTERVAL = 20
 local reloadPending = false
 local updateState = 'Ожидание проверки обновлений'
 local lastUpdateCheck = 0
@@ -400,7 +401,7 @@ function imgui.OnDrawFrame()
   imgui.Separator()
   accent('03   ОБНОВЛЕНИЯ')
   imgui.TextWrapped(updateState)
-  imgui.TextDisabled('Установка в игре. Перезапуск игры не требуется.')
+  imgui.TextDisabled('Автопроверка каждые 20 секунд. Установка в игре.')
   if imgui.Button('ПРОВЕРИТЬ ОБНОВЛЕНИЯ', imgui.ImVec2(240, 36)) then checkUpdate() end
   if updateInfo then
     imgui.SameLine()
@@ -445,7 +446,7 @@ function main()
     imgui.Process=window.v
     imgui.ShowCursor=window.v
     imgui.LockPlayer=window.v
-    if not updateBusy and os.time()-lastUpdateCheck>=1800 then checkUpdate() end
+    if not updateBusy and os.time()-lastUpdateCheck>=UPDATE_INTERVAL then checkUpdate() end
     if active and (os.time()-lastAt >= (tonumber(cfg.main.settle_seconds) or 15) or os.time()-active.at>=60) then finish() end
   end
 end
