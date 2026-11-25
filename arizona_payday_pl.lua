@@ -1,6 +1,6 @@
 script_name('ARIZONA PAYDAY BOT PL')
 script_author('SHEWA')
-script_version('1.4.6')
+script_version('1.5.1')
 
 local inicfg = require 'inicfg'
 local encoding = require 'encoding'
@@ -10,6 +10,9 @@ encoding.default = 'CP1251'
 local u8 = encoding.UTF8
 local configName = 'arizona_payday_pl'
 local MANIFEST_URL = 'https://raw.githubusercontent.com/xromxgame-lgtm/ARIZONA-PAYDAY-BOT/main/manifest.txt'
+local RELEASE_URL = 'https://raw.githubusercontent.com/xromxgame-lgtm/ARIZONA-PAYDAY-BOT/main/arizona_payday_pl.lua'
+local VERSION = '1.5.1'
+local reloadPending = false
 local updateState = 'Ожидание проверки обновлений'
 local lastUpdateCheck = 0
 local updateNoticeVersion = nil
@@ -23,6 +26,8 @@ local chatid = imgui.ImBuffer(64)
 local auto = imgui.ImBool(cfg.main.auto_send)
 local active,last,lastAt = nil,nil,0
 local history = {}
+local historyPath = getWorkingDirectory()..'/config/arizona_payday_pd_totals.tsv'
+local lastPaydayAt
 local diagnostic = 'Ожидаем настоящий Payday от сервера'
 local sending = false
 
@@ -30,8 +35,8 @@ local function save() inicfg.save(cfg,configName) end
 local function note(s)
   -- SA:MP chat requires CP1251, unlike ImGui and Telegram (UTF-8).
   local raw = tostring(s)
-  local ok, cp = pcall(function() return u8:encode(raw) end)
-  sampAddChatMessage('[PAYDAY PD] '..(ok and cp or raw), 0xFF5566)
+  local ok, cp = pcall(function() return u8:decode(raw) end)
+  sampAddChatMessage('[PAYDAY PL] '..(ok and cp or raw), 0xFF5566)
 end
 local function clean(s) return (s or ''):gsub('{%x%x%x%x%x%x}',''):gsub('~[%a]~','') end
 local function num(s)
@@ -53,7 +58,8 @@ local function lowerRu(s)
 end
 local function multiplier(s)
   local l=lowerRu(s)
-  local n=l:match('[xх]%s*([1234])') or l:match('([1234])%s*[xх]')
+  l=l:gsub('х','x')
+  local n=l:match('x%s*([1234])%f[^%d]') or l:match('%f[%d]([1234])%s*x')
   return tonumber(n)
 end
 local function kind(s)
@@ -63,32 +69,57 @@ local function kind(s)
   if l:find('зарплат',1,true) or l:find('заработ',1,true) then return 'salary' end
 end
 local function totals(r)
+  if r.saved then return r.salary,r.bonus,r.tax end
   local salary,bonus,tax=0,0,0
   for _,v in ipairs(r.items) do
     if v.kind=='salary' then salary=salary+v.amount elseif v.kind=='bonus' then bonus=bonus+v.amount else tax=tax+v.amount end
   end
   return salary,bonus,tax
 end
-local function money(n)
-  local v=tostring(math.floor(tonumber(n) or 0))
-  return v:reverse():gsub('(%d%d%d)','%1 '):reverse():gsub('^ ','')
+local function loadHistory()
+  local f=io.open(historyPath,'r')
+  if not f then return end
+  for line in f:lines() do
+    local stamp,m,s,b,t=line:match('^(%d+)\t(%d+)\t(%d+)\t(%d+)\t(%d+)$')
+    if stamp then
+      stamp=tonumber(stamp)
+      local r={at=stamp,time=os.date('%Y-%m-%d %H:%M:%S',stamp),mult=tonumber(m)~=0 and tonumber(m) or nil,salary=tonumber(s),bonus=tonumber(b),tax=tonumber(t),saved=true,items={}}
+      table.insert(history,1,r)
+      last=r; lastPaydayAt=stamp
+    end
+  end
+  f:close()
+end
+local function stats(days)
+  local now=os.date('*t')
+  now.hour,now.min,now.sec=0,0,0
+  now.day=now.day-days+1
+  local cutoff=os.time(now)
+  local n,s,b,t=0,0,0,0
+  for _,r in ipairs(history) do
+    if r.at and r.at>=cutoff then local a,c,d=totals(r);n=n+1;s=s+a;b=b+c;t=t+d end
+  end
+  return n,s+b-t
 end
 local function summary(r)
   local salary,bonus,tax=totals(r)
-  local t={'🔴 SHEWA | PAYDAY SYSTEM', '━━━━━━━━━━━━━━━━━━━━', '🎮 ARIZONA RP • ФИНАНСОВЫЙ ОТЧЁТ', '🕒 '..r.time}
-  if r.mult then table.insert(t,'⚡ Множитель: X'..r.mult) else table.insert(t,'⚡ Множитель: не подтверждён') end
-  if salary>0 then table.insert(t,'💵 Зарплата: $'..money(salary)) end
-  if bonus>0 then table.insert(t,'🎁 Бонусы: +$'..money(bonus)) end
-  if tax>0 then table.insert(t,'💸 Удержания: −$'..money(tax)) end
-  table.insert(t,'━━━━━━━━━━━━━━━━━━━━')
-  table.insert(t,'💰 СУММА ОБНАРУЖЕННЫХ НАЧИСЛЕНИЙ: $'..money(salary+bonus-tax))
-  table.insert(t,'ℹ️ Только суммы из сообщений сервера; баланс счёта не проверен.')
+  local t={'SHEWA PAYDAY '..(r.mult and ('X'..r.mult) or '(множитель не подтверждён)'), 'Время: '..r.time}
+  table.insert(t,'Зарплата по сообщениям: $'..salary)
+  if salary>0 and r.mult==1 then table.insert(t,'Зарплата без множителя: $'..salary)
+  elseif salary>0 and r.mult and r.mult>1 and salary%r.mult==0 then
+    table.insert(t,'Без множителя (оценка): $'..(salary/r.mult))
+    table.insert(t,'Прибавка X'..r.mult..' (оценка): +$'..(salary-salary/r.mult))
+  else table.insert(t,'Зарплата без множителя: не подтверждена') end
+  table.insert(t,'Прочие бонусы: +$'..bonus)
+  table.insert(t,'Налоги и списания: -$'..tax)
+  table.insert(t,'Итого: $'..(salary+bonus-tax))
+  table.insert(t,'Расчёт по игровым сообщениям, не подтверждённый баланс.')
   return table.concat(t,'\n')
 end
 local function urlenc(s) return (s:gsub('([^%w%-_%.~])',function(c) return ('%%%02X'):format(c:byte()) end)) end
 local function send(text)
-  if sending then note('Отправка в Telegram...');return end
-  if tostring(cfg.main.bot_token or '')=='' or tostring(cfg.main.chat_id or '')=='' then note('Укажи токен и Chat ID в /pd');return end
+  if sending then return end
+  if tostring(cfg.main.bot_token or '')=='' or tostring(cfg.main.chat_id or '')=='' then return end
   sending=true
   lua_thread.create(function()
     local ok,err=pcall(function()
@@ -101,7 +132,7 @@ local function send(text)
       if not table.concat(chunks):find('"ok"%s*:%s*true') then error('Telegram API rejected message') end
     end)
     sending=false
-    if ok then note('Отчёт отправлен в Telegram') else note('Ошибка отправки Telegram') end
+    if ok then note('Telegram: отчёт доставлен') else note('Telegram: ошибка отправки. Проверьте настройки /pd') end
   end)
 end
 local function finish()
@@ -110,33 +141,36 @@ local function finish()
   if #r.items==0 then diagnostic='Payday замечен, но подтверждённых сумм нет'; return end
   last=r
   table.insert(history,1,r)
-  if #history>20 then table.remove(history) end
+  lastPaydayAt=r.at
+  local salary,bonus,tax=totals(r)
+  local ledger=io.open(historyPath,'a')
+  if ledger then ledger:write(string.format('%d\t%d\t%d\t%d\t%d\n',r.at,r.mult or 0,salary,bonus,tax));ledger:close()
+  else diagnostic='Не удалось сохранить историю на диск' end
   local f=io.open(getWorkingDirectory()..'/config/arizona_payday_pl_history.txt','a')
   if f then f:write('\n'..summary(r)..'\n');f:close() end
   if cfg.main.auto_send then send(summary(r)) end
   diagnostic='Payday записан: '..r.time
-  note('Payday записан. Открой /pd')
+  note('Payday записан. Меню: /pd')
 end
 function ev.onServerMessage(color,text)
   local raw=clean(text)
-  local ok,s=pcall(function() return u8:decode(raw) end)
+  local ok,s=pcall(function() return u8:encode(raw) end)
   if not ok or type(s)~='string' then return end
   local l=lowerRu(s)
   if l:find('payday',1,true) or l:find('пейдей',1,true) or l:find('пэйдей',1,true) then
-    if active and #active.items>0 then finish() end
-    active={time=os.date('%Y-%m-%d %H:%M:%S'),mult=multiplier(s),items={}}
-    lastAt=os.time()
-    diagnostic='Payday обнаружен, собираю начисления'
-    return
+    if not active then
+      active={at=os.time(),time=os.date('%Y-%m-%d %H:%M:%S'),mult=multiplier(s),items={},seen={}}
+      lastAt=os.time()
+      diagnostic='Payday обнаружен, собираю начисления'
+    end
   end
-  if not active then
-    if kind(s) and num(s) then active={time=os.date('%Y-%m-%d %H:%M:%S'),mult=nil,items={}} else return end
-  end
+  if not active then return end
   local m=multiplier(s)
   if m and (l:find('множител',1,true) or l:find('payday',1,true) or l:find('пейдей',1,true) or l:find('пэйдей',1,true) or l:find('зарплат',1,true)) then active.mult=m end
   local amount=num(s)
   local k=kind(s)
-  if amount and amount > 0 and k then
+  if amount and amount > 0 and k and not active.seen[s] then
+    active.seen[s]=true
     table.insert(active.items,{kind=k,amount=amount,text=s})
     lastAt=os.time()
     diagnostic='Получена строка начисления: '..k
@@ -149,12 +183,13 @@ local function fill()
 end
 local function saveForm()
   local id=tostring(chatid.v)
-  if id~='' and not id:match('^%-?%d+$') then note('Chat ID must contain digits only');return end
+  if id~='' and not id:match('^%-?%d+$') then note('Chat ID должен быть числом');return false end
   cfg.main.bot_token=tostring(token.v)
   cfg.main.chat_id=id
   cfg.main.auto_send=auto.v
   save()
-  note('Settings saved')
+  note('Настройки сохранены')
+  return true
 end
 function imgui.OnInitialize()
   local io = imgui.GetIO()
@@ -214,23 +249,35 @@ local function animatedLine()
 end
 
 local function trustedUrl(url)
-  if type(url)~='string' then return false end
-  local host=url:match('^https://([^/]+)/')
-  return host=='raw.githubusercontent.com'
+  return url==MANIFEST_URL or url==RELEASE_URL
 end
+local downloadSequence=0
 local function fetch(url)
-  if not trustedUrl(url) then error('Разрешены только HTTPS-ссылки GitHub') end
-  local https=require 'ssl.https'
-  local ltn12=require 'ltn12'
-  local chunks={}
-  local _,status=https.request({url=url,sink=ltn12.sink.table(chunks)})
-  if tonumber(status)~=200 then error('HTTP '..tostring(status)) end
-  local body=table.concat(chunks)
+  if not trustedUrl(url) then error('Неизвестный источник обновлений') end
+  local status=require('moonloader').download_status
+  downloadSequence=downloadSequence+1
+  local path=thisScript().path..'.download-'..os.time()..'-'..downloadSequence
+  local complete,success,expired=false,false,false
+  downloadUrlToFile(url,path,function(_,state)
+    if state==status.STATUS_ENDDOWNLOADDATA then success=true end
+    if state==status.STATUSEX_ENDDOWNLOAD then
+      complete=true
+      if expired then os.remove(path) end
+    end
+  end)
+  local start=os.time()
+  while not complete and os.time()-start<45 do wait(100) end
+  if not complete then expired=true;error('Превышено время загрузки') end
+  if not success then os.remove(path);error('Загрузка не удалась') end
+  local f=io.open(path,'rb')
+  if not f then error('Файл загрузки отсутствует') end
+  local body=f:read(2*1024*1024+1) or ''
+  f:close();os.remove(path)
   if #body>2*1024*1024 then error('Файл слишком большой') end
   return body
 end
 local function versionParts(s)
-  local a,b,c=tostring(s):match('^(%d+)%.(%d+)%.?(%d*)')
+  local a,b,c=tostring(s):match('^(%d+)%.(%d+)%.(%d+)$')
   if not a then return nil end
   return tonumber(a)*1000000+tonumber(b)*1000+(tonumber(c) or 0)
 end
@@ -244,21 +291,21 @@ local function checkUpdate()
     local ok,err=pcall(function()
       local body=fetch(url)
       local ver,hash,download=body:match('^%s*([^|\r\n]+)|([a-fA-F0-9]+)|([^\r\n]+)')
-      if not ver or not hash or #hash~=64 or not trustedUrl(download) then error('Неверный manifest.txt') end
+      if not ver or not hash or #hash~=64 or download~=RELEASE_URL then error('Неверный manifest.txt') end
       if not versionParts(ver) then error('Неверная версия') end
-      if versionParts(ver)>versionParts('1.4.6') then
+      if versionParts(ver)>versionParts(VERSION) then
         updateInfo={version=ver,sha=hash:lower(),url=download}
         updateState='Доступна новая версия '..ver..'! Нажми УСТАНОВИТЬ.'
-        if updateNoticeVersion~=ver then note('Доступна версия '..ver..'. Открой /pd'); updateNoticeVersion=ver end
+        if updateNoticeVersion~=ver then note('Update available: v'..ver..'. Open /pd'); updateNoticeVersion=ver end
       else updateInfo=nil;updateState='Установлена актуальная версия (GitHub: '..ver..')' end
     end)
     if not ok then updateInfo=nil;updateState='Ошибка проверки: '..tostring(err):sub(1,110) end
-    note(ok and (updateInfo and ('Доступно обновление '..updateInfo.version) or 'Обновлений нет') or 'Ошибка проверки обновлений. Открой /pd')
     updateBusy=false
   end)
 end
 local function installUpdate()
   if updateBusy or not updateInfo then return end
+  if active or sending then updateState='Дождись завершения Payday или отправки отчёта';return end
   local info=updateInfo
   updateBusy=true;updateState='Скачиваю и проверяю SHA-256...'
   lua_thread.create(function()
@@ -266,8 +313,12 @@ local function installUpdate()
       local data=fetch(info.url)
       if #data<100 or #data>2*1024*1024 then error('Неверный размер файла') end
       if not data:find("script_name('ARIZONA PAYDAY BOT PL')",1,true) then error('Неизвестный Lua-скрипт. Установка отменена') end
+      if not data:find("script_version('"..info.version.."')",1,true) then error('Версия файла не совпадает') end
+      local compiled,compileError=(loadstring or load)(data,'@payday-update')
+      if not compiled then error('Ошибка синтаксиса обновления: '..tostring(compileError)) end
       local path=thisScript().path
       local tmp=path..'.new'
+      if tmp:find('[%%!&|<>^"\r\n]') then error('Недопустимый путь к скрипту') end
       local f=assert(io.open(tmp,'wb'));f:write(data);f:close()
       -- Windows certutil вычисляет SHA256, не выполняя загруженный код.
       local cmd='certutil -hashfile "'..tmp..'" SHA256'
@@ -280,15 +331,16 @@ local function installUpdate()
         if #h==64 and h:lower()==info.sha then verified=true end
       end
       if not verified then os.remove(tmp);error('SHA-256 не совпадает. Установка отменена') end
-      local backup=path..'.bak'
-      os.remove(backup)
+      if active or sending then os.remove(tmp);error('Подожди завершения текущего отчёта') end
+      local backup=path..'.bak-'..os.time()
       if not os.rename(path,backup) then error('Не удалось создать резервную копию') end
       if not os.rename(tmp,path) then os.rename(backup,path);error('Не удалось заменить скрипт') end
       updateInfo=nil
-      updateState='Версия '..info.version..' установлена. Перезапусти игру.'
+      updateState='Версия '..info.version..' установлена. Перезагрузка скрипта...'
+      reloadPending=true
     end)
     if not ok then updateState='Ошибка установки: '..tostring(err):sub(1,110) end
-    note(ok and 'Обновление установлено. Перезапусти игру' or 'Ошибка установки. Открой /pd')
+    note(ok and 'Обновление установлено. Перезагружаю скрипт.' or 'Ошибка установки. Подробности в /pd')
     updateBusy=false
   end)
 end
@@ -299,9 +351,12 @@ function imgui.OnDrawFrame()
   imgui.SetNextWindowSize(imgui.ImVec2(640, 590), imgui.Cond.FirstUseEver)
   if imgui.SetNextWindowBgAlpha then imgui.SetNextWindowBgAlpha(1.0) end
   imgui.Begin('ARIZONA  |  PAYDAY BOT  |  /pd', window)
+  if imgui.GetWindowDrawList and imgui.GetWindowPos and imgui.GetWindowSize then
+    -- Existing ImGui theme remains opaque; no transparent decorative image overlay.
+  end
   animatedLine()
   accent('A R I Z O N A    /    P A Y D A Y')
-  imgui.TextDisabled('GTA REDLINE  /  SHEWA EDITION  /  v1.4.6')
+  imgui.TextDisabled('SHEWA PAYDAY  /  v'..VERSION)
   imgui.Separator()
   accent('01   TELEGRAM')
   imgui.Text('Токен бота')
@@ -314,8 +369,7 @@ function imgui.OnDrawFrame()
   if imgui.Button('СОХРАНИТЬ', imgui.ImVec2(170, 34)) then saveForm() end
   imgui.SameLine()
   if imgui.Button('ТЕСТ TELEGRAM', imgui.ImVec2(180, 34)) then
-    saveForm()
-    send('🔴 SHEWA | PAYDAY SYSTEM\n✅ Проверка связи Telegram успешна')
+    if saveForm() then send('SHEWA PAYDAY: проверка подключения') end
   end
   imgui.Separator()
   accent('02   PAYDAY / ОТЧЁТ')
@@ -325,16 +379,28 @@ function imgui.OnDrawFrame()
     imgui.Text('Множитель: '..(r.mult and ('X'..r.mult) or 'не определён')..'   |   '..r.time)
     imgui.Text('Зарплата: $'..salary..'   Бонус: +$'..bonus..'   Налоги: -$'..tax)
     imgui.Text('Итого по сообщениям: $'..(salary+bonus-tax))
-    if #r.items > 0 and imgui.Button('ОТПРАВИТЬ ОТЧЁТ', imgui.ImVec2(190, 32)) then saveForm();send(summary(r)) end
+    if (r.saved or #r.items > 0) and imgui.Button('ОТПРАВИТЬ ОТЧЁТ', imgui.ImVec2(190, 32)) then if saveForm() then send(summary(r)) end end
   else
     imgui.TextDisabled('Ожидаем Payday. Множитель определяется автоматически.')
   end
   imgui.TextWrapped(diagnostic)
-  imgui.TextDisabled('За этот запуск записано: '..#history)
+  imgui.TextDisabled('Всего записано: '..#history)
+  for _,period in ipairs({{1,'Сегодня'},{7,'7 дней'},{30,'30 дней'}}) do
+    local count,net=stats(period[1])
+    imgui.Text(period[2]..': '..count..' выплат | $'..net)
+  end
+  if lastPaydayAt then
+    local remaining=3600-(os.time()-lastPaydayAt)
+    if remaining>0 then imgui.Text(string.format('До следующего Payday (оценка): %02d:%02d',math.floor(remaining/60),remaining%60))
+    else imgui.TextDisabled('Ожидаем следующий Payday') end
+  end
+  if imgui.CollapsingHeader('История выплат') then
+    for i=1,math.min(#history,30) do local item=history[i];local a,b,c=totals(item);imgui.Text(item.time..' | $'..(a+b-c)) end
+  end
   imgui.Separator()
   accent('03   ОБНОВЛЕНИЯ')
   imgui.TextWrapped(updateState)
-  imgui.TextDisabled('Автопроверка каждые 30 минут. Установка только по кнопке.')
+  imgui.TextDisabled('Установка в игре. Перезапуск игры не требуется.')
   if imgui.Button('ПРОВЕРИТЬ ОБНОВЛЕНИЯ', imgui.ImVec2(240, 36)) then checkUpdate() end
   if updateInfo then
     imgui.SameLine()
@@ -350,24 +416,36 @@ end
 
 function main()
   while not isSampAvailable() do wait(200) end
-  sampRegisterChatCommand('pl',function()
+  loadHistory()
+  local function toggleWindow()
     window.v=not window.v
     imgui.Process=window.v
     imgui.ShowCursor=window.v
     imgui.LockPlayer=window.v
-  end)
+  end
+  sampRegisterChatCommand('pd',toggleWindow)
+  if not sampIsChatCommandDefined or not sampIsChatCommandDefined('pl') then sampRegisterChatCommand('pl',toggleWindow) end
   local filled, fillErr = pcall(fill)
-  if not filled then print('[PAYDAY PD] Config field error: '..tostring(fillErr)) end
+  if not filled then print('[PAYDAY PL] Config field error: '..tostring(fillErr)) end
   local themed, themeErr = pcall(theme)
-  if not themed then print('[PAYDAY PD] Theme fallback: '..tostring(themeErr)) end
-  note('Ready. Open /pd')
+  if not themed then print('[PAYDAY PL] Theme fallback: '..tostring(themeErr)) end
+  note('Готово. Меню: /pd')
   checkUpdate()
   while true do
     wait(100)
+    if reloadPending then
+      window.v=false
+      imgui.Process=false
+      imgui.ShowCursor=false
+      imgui.LockPlayer=false
+      wait(300)
+      thisScript():reload()
+      return
+    end
     imgui.Process=window.v
     imgui.ShowCursor=window.v
     imgui.LockPlayer=window.v
     if not updateBusy and os.time()-lastUpdateCheck>=1800 then checkUpdate() end
-    if active and #active.items>0 and os.time()-lastAt >= (tonumber(cfg.main.settle_seconds) or 15) then finish() end
+    if active and (os.time()-lastAt >= (tonumber(cfg.main.settle_seconds) or 15) or os.time()-active.at>=60) then finish() end
   end
 end

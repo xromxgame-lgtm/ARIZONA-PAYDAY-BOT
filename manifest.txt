@@ -1,1 +1,1 @@
-1.4.6|548dd9929e01d2f3e9624d1c000077ebb2fae9f43f62ef5cd6f8dc31d24d0076|https://raw.githubusercontent.com/xromxgame-lgtm/ARIZONA-PAYDAY-BOT/main/arizona_payday_pl.lua
+1.5.1|e0b1c0921ce0eef95b6c80787316e012d2291bdd111a68ef7d570b68308f882c|https://raw.githubusercontent.com/xromxgame-lgtm/ARIZONA-PAYDAY-BOT/main/arizona_payday_pl.lua
